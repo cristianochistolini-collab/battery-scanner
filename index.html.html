@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Battery Scanner</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0a;
+    --surface: #141414;
+    --border: #222;
+    --text: #f0f0f0;
+    --muted: #666;
+    --faulty: #ff2d2d;
+    --faulty-bg: #1a0000;
+    --faulty-glow: rgba(255,45,45,0.3);
+    --ok: #00e676;
+    --ok-bg: #001a0a;
+    --ok-glow: rgba(0,230,118,0.3);
+    --unknown: #ff9800;
+    --unknown-bg: #1a0e00;
+    --accent: #ffffff;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Courier New', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+
+  /* HEADER */
+  .header {
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--surface);
+  }
+  .header-left { display: flex; align-items: center; gap: 10px; }
+  .logo-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+  @keyframes pulse-dot {
+    0%,100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.7); }
+  }
+  .header-title {
+    font-size: 13px;
+    font-weight: bold;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--text);
+  }
+  .header-count {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+  }
+
+  /* MAIN CONTENT */
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    gap: 14px;
+  }
+
+  /* SCANNER VIEWPORT */
+  .scanner-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1;
+    max-width: 380px;
+    margin: 0 auto;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #000;
+    border: 1px solid var(--border);
+  }
+  #video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  #canvas { display: none; }
+
+  /* SCAN OVERLAY */
+  .scan-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .scan-corner {
+    position: absolute;
+    width: 28px; height: 28px;
+    border-color: var(--accent);
+    border-style: solid;
+    border-width: 0;
+  }
+  .scan-corner.tl { top: 20px; left: 20px; border-top-width: 2px; border-left-width: 2px; }
+  .scan-corner.tr { top: 20px; right: 20px; border-top-width: 2px; border-right-width: 2px; }
+  .scan-corner.bl { bottom: 20px; left: 20px; border-bottom-width: 2px; border-left-width: 2px; }
+  .scan-corner.br { bottom: 20px; right: 20px; border-bottom-width: 2px; border-right-width: 2px; }
+
+  .scan-line {
+    position: absolute;
+    left: 20px; right: 20px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    top: 20px;
+    animation: scan-sweep 2.5s ease-in-out infinite;
+    opacity: 0.6;
+  }
+  @keyframes scan-sweep {
+    0% { top: 20px; }
+    100% { top: calc(100% - 20px); }
+  }
+
+  /* RESULT FLASH OVERLAY */
+  .result-flash {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s;
+    pointer-events: none;
+  }
+  .result-flash.show { opacity: 1; }
+  .result-flash.faulty { background: rgba(26,0,0,0.88); }
+  .result-flash.ok { background: rgba(0,26,10,0.88); }
+  .result-flash.unknown { background: rgba(26,14,0,0.88); }
+  .flash-icon { font-size: 52px; line-height: 1; margin-bottom: 8px; }
+  .flash-label {
+    font-size: 22px;
+    font-weight: bold;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+  .flash-label.faulty { color: var(--faulty); }
+  .flash-label.ok { color: var(--ok); }
+  .flash-label.unknown { color: var(--unknown); }
+
+  /* IDLE overlay */
+  .idle-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+  }
+  .idle-overlay.hidden { display: none; }
+  .start-btn {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    padding: 12px 32px;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    font-weight: bold;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: opacity 0.15s;
+  }
+  .start-btn:hover { opacity: 0.85; }
+  .idle-label {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-align: center;
+    padding: 0 20px;
+  }
+
+  /* LAST RESULT CARD */
+  .result-card {
+    border-radius: 4px;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    display: none;
+    animation: slide-up 0.2s ease;
+  }
+  .result-card.visible { display: block; }
+  .result-card.faulty { border-color: var(--faulty); background: var(--faulty-bg); box-shadow: 0 0 20px var(--faulty-glow); }
+  .result-card.ok { border-color: var(--ok); background: var(--ok-bg); box-shadow: 0 0 20px var(--ok-glow); }
+  .result-card.unknown { border-color: var(--unknown); background: var(--unknown-bg); }
+
+  @keyframes slide-up {
+    from { transform: translateY(8px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+
+  .result-status {
+    font-size: 18px;
+    font-weight: bold;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .result-status.faulty { color: var(--faulty); }
+  .result-status.ok { color: var(--ok); }
+  .result-status.unknown { color: var(--unknown); }
+
+  .result-serial {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    word-break: break-all;
+    margin-bottom: 4px;
+  }
+  .result-time {
+    font-size: 10px;
+    color: #444;
+    letter-spacing: 0.06em;
+  }
+
+  /* SESSION LOG */
+  .log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .log-title {
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .log-actions { display: flex; gap: 8px; }
+  .btn-sm {
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 5px 10px;
+    border-radius: 2px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    transition: all 0.15s;
+  }
+  .btn-sm:hover { border-color: var(--text); color: var(--text); }
+  .btn-sm.export { border-color: var(--ok); color: var(--ok); }
+  .btn-sm.export:hover { background: var(--ok-bg); }
+
+  .log-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .log-list::-webkit-scrollbar { width: 3px; }
+  .log-list::-webkit-scrollbar-track { background: transparent; }
+  .log-list::-webkit-scrollbar-thumb { background: var(--border); }
+
+  .log-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 2px;
+    background: var(--surface);
+    border-left: 2px solid transparent;
+    font-size: 11px;
+  }
+  .log-item.faulty { border-left-color: var(--faulty); }
+  .log-item.ok { border-left-color: var(--ok); }
+  .log-item.unknown { border-left-color: var(--unknown); }
+
+  .log-badge {
+    font-size: 9px;
+    font-weight: bold;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .log-badge.faulty { background: var(--faulty-bg); color: var(--faulty); border: 1px solid var(--faulty); }
+  .log-badge.ok { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok); }
+  .log-badge.unknown { background: var(--unknown-bg); color: var(--unknown); border: 1px solid var(--unknown); }
+
+  .log-serial {
+    flex: 1;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .log-time { color: #444; flex-shrink: 0; font-size: 10px; }
+
+  .log-empty {
+    text-align: center;
+    color: #333;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    padding: 24px 0;
+  }
+
+  /* STATS BAR */
+  .stats-bar {
+    display: flex;
+    gap: 8px;
+  }
+  .stat {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 10px 12px;
+    text-align: center;
+  }
+  .stat-value {
+    font-size: 22px;
+    font-weight: bold;
+    line-height: 1;
+    margin-bottom: 3px;
+  }
+  .stat-value.faulty { color: var(--faulty); }
+  .stat-value.ok { color: var(--ok); }
+  .stat-value.total { color: var(--text); }
+  .stat-label {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* MANUAL INPUT */
+  .manual-wrap {
+    display: flex;
+    gap: 8px;
+  }
+  .manual-input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    color: var(--text);
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    padding: 9px 12px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .manual-input:focus { border-color: var(--accent); }
+  .manual-input::placeholder { color: #333; }
+  .btn-check {
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 9px 16px;
+    border-radius: 2px;
+    cursor: pointer;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #000;
+    font-weight: bold;
+    transition: opacity 0.15s;
+    white-space: nowrap;
+  }
+  .btn-check:hover { opacity: 0.85; }
+
+  .section-label {
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: #333;
+    margin-bottom: 6px;
+  }
+
+  /* COOLDOWN indicator */
+  .cooldown-bar {
+    height: 2px;
+    background: var(--border);
+    border-radius: 1px;
+    overflow: hidden;
+    margin-top: 6px;
+    display: none;
+  }
+  .cooldown-bar.active { display: block; }
+  .cooldown-fill {
+    height: 100%;
+    background: var(--accent);
+    width: 100%;
+    transform-origin: left;
+    animation: cooldown-drain 2s linear forwards;
+  }
+  @keyframes cooldown-drain {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div class="logo-dot"></div>
+    <span class="header-title">Battery Scanner</span>
+  </div>
+  <span class="header-count" id="faultyCount">— faulty serials loaded</span>
+</div>
+
+<div class="content">
+
+  <!-- SCANNER -->
+  <div class="scanner-wrap" id="scannerWrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+
+    <div class="scan-overlay">
+      <div class="scan-corner tl"></div>
+      <div class="scan-corner tr"></div>
+      <div class="scan-corner bl"></div>
+      <div class="scan-corner br"></div>
+      <div class="scan-line" id="scanLine"></div>
+    </div>
+
+    <div class="result-flash" id="resultFlash">
+      <div class="flash-icon" id="flashIcon"></div>
+      <div class="flash-label" id="flashLabel"></div>
+    </div>
+
+    <div class="idle-overlay" id="idleOverlay">
+      <button class="start-btn" onclick="startCamera()">START SCANNING</button>
+      <span class="idle-label">Camera access required</span>
+    </div>
+
+    <div class="cooldown-bar" id="cooldownBar">
+      <div class="cooldown-fill" id="cooldownFill"></div>
+    </div>
+  </div>
+
+  <!-- LAST RESULT -->
+  <div class="result-card" id="resultCard">
+    <div class="result-status" id="resultStatus"></div>
+    <div class="result-serial" id="resultSerial"></div>
+    <div class="result-time" id="resultTime"></div>
+  </div>
+
+  <!-- STATS -->
+  <div class="stats-bar">
+    <div class="stat">
+      <div class="stat-value total" id="statTotal">0</div>
+      <div class="stat-label">Scanned</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value faulty" id="statFaulty">0</div>
+      <div class="stat-label">Faulty</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value ok" id="statOk">0</div>
+      <div class="stat-label">OK</div>
+    </div>
+  </div>
+
+  <!-- MANUAL CHECK -->
+  <div>
+    <div class="section-label">Manual check</div>
+    <div class="manual-wrap">
+      <input class="manual-input" id="manualInput" type="text" placeholder="Type or paste serial number" />
+      <button class="btn-check" onclick="checkManual()">Check</button>
+    </div>
+  </div>
+
+  <!-- SESSION LOG -->
+  <div>
+    <div class="log-header">
+      <span class="log-title">Session log</span>
+      <div class="log-actions">
+        <button class="btn-sm" onclick="clearLog()">Clear</button>
+        <button class="btn-sm export" onclick="exportLog()">Export CSV</button>
+      </div>
+    </div>
+    <div class="log-list" id="logList">
+      <div class="log-empty" id="logEmpty">No scans yet</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ─── FAULTY SERIAL LIST ───────────────────────────────────────────────────────
+const FAULTY_SERIALS = new Set([
+"02062502300400002002613","02062502300400002002615","02062502300400002002616",
+"02062502300400002002617","02062502300400002002618","02062502300400002002621",
+"02062502300400002002626","02062502300400002002627","02062502300400002002634",
+"02062502300400002002636","02062502300400002002639","02062502300400002002647",
+"02062502300400002002648","02062502300400002002653","02062502300400002002661",
+"02062502300400002002666","02062502300400002002668","02062502300400002002672",
+"02062502300400002002683","02062502300400002002690","02062502300400002002695",
+"02062502300400002002700","02062502300400002002707","02062502300400002002708",
+"02062502300400002002711","02062502300400002002723","02062502300400002002724",
+"02062502300400002002728","02062502300400002002735","02062502300400002002736",
+"02062502300400002002740","02062502300400002002745","02062502300400002002758",
+"02062502300400002002760","02062502300400002002763","02062502300400002002776",
+"02062502300400002002787","02062502300400002002791","02062502300400002002796",
+"02062502300400002002800","02062502300400002002804","02062502300400002002810",
+"02062502300400002002811","02062502300400002002814","02062502300400002002816",
+"02062502300400002002822","02062502300400002002824","02062502300400002002834",
+"02062502300400002002835","02062502300400002002836","02062502300400002002848",
+"02062502300400002002853","02062502300400002002858","02062502300400002002863",
+"02062502300400002002865","02062502300400002002868","02062502300400002002870",
+"02062502300400002002872","02062502300400002002875","02062502300400002002882",
+"02062502300400002002884","02062502300400002002887","02062502300400002002890",
+"02062502300400002002907","02062502300400002002915","02062502300400002002918",
+"02062502300400002002922","02062502300400002002930","02062502300400002002934",
+"02062502300400002002937","02062502300400002002955","02062502300400002002956",
+"02062502300400002002959","02062502300400002002960","02062502300400002002962",
+"02062502300400002002968","02062502300400002002975","02062502300400002002983",
+"02062502300400002002994","02062502300400002002995","02062502300400002002999",
+"02062502300400002003002","02062502300400002003009","02062502300400002003010",
+"02092502300500002404012","02092502300500002404069","02092502300500002404323",
+"04112502300500003208256","04112502300500003208287","04112502300500003208362",
+"07112502300500003308587","07112502300500003308721","07112502300500003308875",
+"07112502300500003308882","07112502300500003308887","08052502300100001301257",
+"08052502300100001301263","08052502300100001301266","08052502300100001301269",
+"08052502300100001301272","08052502300100001301280","08052502300100001301295",
+"08052502300100001301300","08052502300100001301301","09052502300100001401320",
+"09052502300100001401324","09052502300100001401335","09052502300100001401338",
+"09052502300100001401339","09052502300100001401343","09052502300100001401346",
+"09052502300100001401347","09052502300100001401350","09052502300100001401351",
+"09052502300100001401355","09052502300100001401357","09052502300100001401358",
+"09052502300100001401361","09052502300100001401368","09052502300100001401374",
+"09052502300100001401378","09052502300100001401381","09052502300100001401384",
+"09052502300100001401387","09052502300100001401392","09052502300100001401398",
+"09052502300100001401402","09052502300100001401405","09122502300500003509698",
+"09122502300500003509948","09122502300500003509991","10092502300500002504677",
+"10092502300500002504859","10092502300500002504861","10092502300500002504914",
+"10092502300500002504953","10092502300500002504983","10102502300500002806025",
+"10102502300500002806070","10102502300500002806394","12052502300200001501411",
+"12052502300200001501414","12052502300200001501422","12052502300200001501438",
+"12052502300200001501439","12052502300200001501442","12052502300200001501445",
+"12052502300200001501458","12052502300200001501464","12052502300200001501465",
+"12052502300200001501469","12052502300200001501470","12052502300200001501471",
+"12052502300200001501472","12052502300200001501474","12052502300200001501477",
+"12052502300200001501479","12052502300200001501484","12052502300200001501498",
+"12052502300200001501501","12052502300200001501504","12052502300200001501510",
+"12052502300200001501511","12052502300200001501514","12052502300200001501518",
+"12052502300200001501520","12052502300200001501535","12052502300200001501536",
+"12052502300200001501539","12052502300200001501551","12052502300200001501560",
+"12052502300200001501569","12052502300200001501571","12052502300200001501579",
+"14012602300500003710779","14012602300500003710986","14052502300200001601612",
+"14052502300200001601636","14052502300200001601639","14052502300200001601654",
+"14052502300200001601655","14052502300200001601661","14052502300200001601665",
+"14052502300200001601682","14052502300200001601691","14052502300200001601695",
+"14052502300200001601708","14052502300200001601717","14052502300200001601719",
+"14052502300200001601726","14052502300200001601731","14052502300200001601747",
+"14052502300200001601748","14052502300200001601754","14052502300200001601756",
+"14052502300200001601763","14052502300200001601766","14052502300200001601771",
+"14052502300200001601772","14052502300200001601775","14052502300200001601777",
+"14052502300200001601783","14112502300500003409223","14112502300500003409436",
+"14112502300500003409483","15102502300500002906768","15102502300500002906906",
+"15102502300500002906907","15102502300500002906913","15102502300500002906976",
+"15102502300500002906982","16062502300200002103019","16062502300200002103028",
+"16062502300200002103032","16062502300200002103033","16062502300200002103044",
+"16062502300200002103046","16062502300200002103047","16062502300200002103054",
+"16062502300200002103055","16062502300200002103067","16062502300200002103069",
+"16062502300200002103079","16062502300200002103096","16062502300200002103116",
+"16062502300200002103117","16062502300200002103119","16062502300200002103133",
+"16062502300200002103138","16062502300200002103142","16062502300200002103151",
+"16062502300200002103154","16062502300200002103160","16062502300200002103203",
+"17092502300500002605455","17092502300500002605506","18022602300500003911530",
+"18022602300500003911545","18022602300500003911556","18022602300500003911568",
+"18022602300500003911707","18022602300500003911852","18022602300500003911860",
+"18062502300200002203246","18062502300200002203281","18062502300200002203282",
+"18062502300200002203285","18062502300200002203288","18062502300200002203293",
+"18062502300200002203297","18062502300200002203300","18062502300200002203302",
+"18062502300200002203303","18062502300200002203305","18062502300200002203306",
+"18062502300200002203317","18062502300200002203320","18062502300200002203337",
+"18062502300200002203342","18062502300200002203345","18062502300200002203376",
+"18062502300200002203381","18062502300200002203385","18062502300200002203386",
+"18062502300200002203387","18062502300200002203401","18062502300200002203409",
+"19052502300200001701811","19052502300200001701816","19052502300200001701818",
+"19052502300200001701829","19052502300200001701839","19052502300200001701840",
+"19052502300200001701841","19052502300200001701842","19052502300200001701845",
+"19052502300200001701860","19052502300200001701867","19052502300200001701874",
+"19052502300200001701880","19052502300200001701881","19052502300200001701888",
+"19052502300200001701889","19052502300200001701897","19052502300200001701903",
+"19052502300200001701904","19052502300200001701905","19052502300200001701910",
+"19052502300200001701912","19052502300200001701913","19052502300200001701918",
+"19052502300200001701919","19052502300200001701921","19052502300200001701922",
+"19052502300200001701925","19052502300200001701930","19052502300200001701934",
+"19052502300200001701942","19052502300200001701957","19052502300200001701959",
+"19052502300200001701960","19052502300200001701967","19052502300200001701970",
+"19052502300200001701974","19052502300200001701981","21012602300500003811030",
+"21012602300500003811157","21012602300500003811164","21012602300500003811298",
+"21012602300500003811307","22012502300259001000857","22072502300200002303869",
+"22072502300200002303976","22092502300500002705551","22092502300500002705553",
+"22092502300500002705564","22092502300500002705861","23042502300100001101038",
+"23042502300100001101061","23042502300100001101067","23042502300100001101080",
+"23042502300100001101093","24062502300400002303412","24062502300400002303414",
+"24062502300400002303419","24062502300400002303430","24062502300400002303431",
+"24062502300400002303654","24062502300400002303726","24102502300500003007066",
+"24102502300500003007175","24102502300500003007349","24102502300500003007418",
+"24102502300500003007424","24102502300500003007502","24102502300500003007507",
+"26022602300500004012161","26022602300500004012170","26022602300500004012229",
+"26052502300200001802011","26052502300200001802017","26052502300200001802031",
+"26052502300200001802038","26052502300200001802051","26052502300200001802053",
+"26052502300200001802063","26052502300200001802064","26052502300200001802072",
+"26052502300200001802083","26052502300200001802085","26052502300200001802086",
+"26052502300200001802087","26052502300200001802089","26052502300200001802091",
+"26052502300200001802101","26052502300200001802103","26052502300200001802105",
+"26052502300200001802116","26052502300200001802119","26052502300200001802127",
+"26052502300200001802133","26052502300200001802137","26052502300200001802138",
+"26052502300200001802139","26052502300200001802141","26052502300200001802143",
+"26052502300200001802151","26052502300200001802170","26052502300200001802171",
+"26052502300200001802176","26052502300200001802178","26052502300200001802185",
+"26052502300200001802195","26052502300200001802205","26052502300200001802209",
+"27052502300400001902213","27052502300400001902215","27052502300400001902217",
+"27052502300400001902219","27052502300400001902220","27052502300400001902222",
+"27052502300400001902228","27052502300400001902230","27052502300400001902231",
+"27052502300400001902235","27052502300400001902245","27052502300400001902251",
+"27052502300400001902254","27052502300400001902273","27052502300400001902274",
+"27052502300400001902275","27052502300400001902280","27052502300400001902282",
+"27052502300400001902283","27052502300400001902285","27052502300400001902299",
+"27052502300400001902302","27052502300400001902303","27052502300400001902322",
+"27052502300400001902324","27052502300400001902330","27052502300400001902337",
+"27052502300400001902338","27052502300400001902348","27052502300400001902354",
+"27052502300400001902357","27052502300400001902363","27052502300400001902365",
+"27052502300400001902366","27052502300400001902370","27052502300400001902381",
+"27052502300400001902385","27052502300400001902386","27052502300400001902409",
+"27052502300400001902416","27052502300400001902417","27052502300400001902419",
+"27052502300400001902432","27052502300400001902436","27052502300400001902438",
+"27052502300400001902445","27052502300400001902450","27052502300400001902452",
+"27052502300400001902459","27052502300400001902467","27052502300400001902469",
+"27052502300400001902477","27052502300400001902483","27052502300400001902484",
+"27052502300400001902492","27052502300400001902493","27052502300400001902495",
+"27052502300400001902497","27052502300400001902504","27052502300400001902505",
+"27052502300400001902511","27052502300400001902513","27052502300400001902525",
+"27052502300400001902527","27052502300400001902530","27052502300400001902535",
+"27052502300400001902541","27052502300400001902545","27052502300400001902548",
+"27052502300400001902553","27052502300400001902558","27052502300400001902560",
+"27052502300400001902565","27052502300400001902566","27052502300400001902573",
+"27052502300400001902575","27052502300400001902585","27052502300400001902590",
+"27052502300400001902601","27052502300400001902608","27052502300400001902609",
+"28102502300500003107580","28102502300500003107664","28102502300500003107706",
+"28102502300500003107753","30042502300100001201144","30042502300100001201162",
+"30042502300100001201201","30042502300100001201202"
+]);
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let scanning = false;
+let cooldown = false;
+let sessionLog = [];
+let animFrame = null;
+
+// Update header count
+document.getElementById('faultyCount').textContent = `${FAULTY_SERIALS.size} faulty serials loaded`;
+
+// ─── CAMERA ───────────────────────────────────────────────────────────────────
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+    const video = document.getElementById('video');
+    video.srcObject = stream;
+    video.play();
+    document.getElementById('idleOverlay').classList.add('hidden');
+    scanning = true;
+    requestAnimationFrame(tick);
+  } catch (e) {
+    alert('Camera access denied. Please allow camera permission and reload.');
+  }
+}
+
+function tick() {
+  if (!scanning) return;
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+      inversionAttempts: 'dontInvert'
+    });
+    if (code && !cooldown) {
+      handleScan(code.data.trim());
+    }
+  }
+  animFrame = requestAnimationFrame(tick);
+}
+
+// ─── SCAN HANDLER ────────────────────────────────────────────────────────────
+function handleScan(serial) {
+  cooldown = true;
+  const status = checkSerial(serial);
+  showResult(serial, status);
+  addToLog(serial, status);
+  updateStats();
+
+  // vibrate if supported
+  if (navigator.vibrate) {
+    navigator.vibrate(status === 'faulty' ? [100, 50, 100] : [80]);
+  }
+
+  // cooldown visual
+  const bar = document.getElementById('cooldownBar');
+  bar.classList.add('active');
+  const fill = document.getElementById('cooldownFill');
+  fill.style.animation = 'none';
+  fill.offsetHeight; // reflow
+  fill.style.animation = 'cooldown-drain 2s linear forwards';
+
+  setTimeout(() => {
+    cooldown = false;
+    bar.classList.remove('active');
+    hideFlash();
+  }, 2000);
+}
+
+function checkSerial(serial) {
+  if (FAULTY_SERIALS.has(serial)) return 'faulty';
+  return 'ok';
+}
+
+// ─── UI ───────────────────────────────────────────────────────────────────────
+function showResult(serial, status) {
+  // Flash overlay
+  const flash = document.getElementById('resultFlash');
+  const flashIcon = document.getElementById('flashIcon');
+  const flashLabel = document.getElementById('flashLabel');
+  flash.className = `result-flash show ${status}`;
+  flashIcon.textContent = status === 'faulty' ? '✗' : '✓';
+  flashLabel.textContent = status === 'faulty' ? 'FAULTY' : 'OK';
+  flashLabel.className = `flash-label ${status}`;
+
+  // Result card
+  const card = document.getElementById('resultCard');
+  const cardStatus = document.getElementById('resultStatus');
+  const cardSerial = document.getElementById('resultSerial');
+  const cardTime = document.getElementById('resultTime');
+  card.className = `result-card visible ${status}`;
+  cardStatus.className = `result-status ${status}`;
+  cardStatus.textContent = status === 'faulty' ? '✗ FAULTY — DO NOT USE' : '✓ OK — GOOD BATTERY';
+  cardSerial.textContent = serial;
+  cardTime.textContent = new Date().toLocaleTimeString();
+}
+
+function hideFlash() {
+  const flash = document.getElementById('resultFlash');
+  flash.classList.remove('show');
+}
+
+function addToLog(serial, status) {
+  const entry = { serial, status, time: new Date().toLocaleTimeString() };
+  sessionLog.unshift(entry);
+
+  const logList = document.getElementById('logList');
+  document.getElementById('logEmpty').style.display = 'none';
+
+  const item = document.createElement('div');
+  item.className = `log-item ${status}`;
+  item.innerHTML = `
+    <span class="log-badge ${status}">${status === 'faulty' ? 'FAULTY' : 'OK'}</span>
+    <span class="log-serial">${serial}</span>
+    <span class="log-time">${entry.time}</span>
+  `;
+  logList.insertBefore(item, logList.firstChild);
+}
+
+function updateStats() {
+  document.getElementById('statTotal').textContent = sessionLog.length;
+  document.getElementById('statFaulty').textContent = sessionLog.filter(e => e.status === 'faulty').length;
+  document.getElementById('statOk').textContent = sessionLog.filter(e => e.status === 'ok').length;
+}
+
+// ─── MANUAL CHECK ─────────────────────────────────────────────────────────────
+function checkManual() {
+  const input = document.getElementById('manualInput');
+  const serial = input.value.trim();
+  if (!serial) return;
+  const status = checkSerial(serial);
+  showResult(serial, status);
+  addToLog(serial, status);
+  updateStats();
+  input.value = '';
+  if (navigator.vibrate) navigator.vibrate(status === 'faulty' ? [100, 50, 100] : [80]);
+}
+
+document.getElementById('manualInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') checkManual();
+});
+
+// ─── LOG ACTIONS ─────────────────────────────────────────────────────────────
+function clearLog() {
+  sessionLog = [];
+  document.getElementById('logList').innerHTML = '<div class="log-empty" id="logEmpty">No scans yet</div>';
+  updateStats();
+  document.getElementById('resultCard').classList.remove('visible');
+}
+
+function exportLog() {
+  if (sessionLog.length === 0) { alert('No scans to export.'); return; }
+  const rows = ['Serial,Status,Time', ...sessionLog.map(e => `${e.serial},${e.status},${e.time}`)];
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `battery-scan-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>
